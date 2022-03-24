@@ -228,6 +228,7 @@ class MonteCarloTreeSearch:
     """
     Basic implementation of Monte Carlo Tree Search
     """
+
     def __init__(self, calculation_time=.09) -> None:
         self.root = Node()
         self.calc_time = calculation_time
@@ -275,6 +276,7 @@ class MonteCarloTreeSearch:
 
 class PlayGame:
     """Deals with everything for actually playing the game"""
+
     def __init__(self) -> None:
         self.mcts = MonteCarloTreeSearch()
 
