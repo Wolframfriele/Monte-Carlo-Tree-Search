@@ -1,6 +1,6 @@
 """Unit tests for the monte carlo tree search library."""
 import unittest
-from mcts_lists import GameState, GameSimulator
+from mcts_tic_tac_toe import GameState, GameSimulator
 
 
 class GameStateTestCase(unittest.TestCase):
@@ -48,7 +48,7 @@ class GameSimulatorTestCase(unittest.TestCase):
 
     def test_is_even(self):
         game = GameSimulator({'player': True, 'board': (0b011010001, 0b100001110)})
-        self.assertEqual(game.play_out(), 2)
+        self.assertEqual(game.play_out(), None)
 
 
 if __name__ == '__main__':

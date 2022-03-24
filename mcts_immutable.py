@@ -63,6 +63,8 @@ POSSIBLE_MOVES = (
     0b000000001,
 )
 
+EXPLORATION_CONST = .8
+
 
 class GameState:
     """
@@ -91,121 +93,77 @@ class GameState:
         """Gets the state as a dictionary"""
         return {'player': self.player, 'board': self.board}
 
-    def _check_win_move(self, bit_location: int) -> bool:
+    def won(self, bit_location: int) -> bool:
         """Checks if the last move won the game, returns True if won"""
-        won = False
         for state in WIN_STATE_MOVE[bit_location]:
-            won |= (self.board[self.player] & state) == state
-        return won
-
-    def is_won(self) -> bool:
-        """Checks if there is a win in the current gamestate, returns True if won"""
-        for state in WIN_STATE:
-            player_0_won = (self.board[0] & state) == state
-            player_1_won = (self.board[1] & state) == state
-            if player_0_won or player_1_won:
+            if (self.board[self.player] & state) == state:
                 return True
         return False
 
-    def _get_available(self) -> int:
+    def get_available(self) -> int:
         """Finds available bits where none of the players has put a mark."""
         return (self.board[0] | self.board[1]) ^ 0b111111111
 
     def get_available_moves(self) -> list:
         """Takes the available bits, and converts it to a list of possible moves"""
-        available_bits = self._get_available()
+        available_bits = self.get_available()
         available_moves = []
         for move in POSSIBLE_MOVES:
             if move & available_bits == move:
                 available_moves.append(move)
         return available_moves
 
-    def is_terminated(self) -> bool:
-        """Checks if the game is won or that there is a draw"""
-        return self.is_won() or self._get_available() == 0
+    def terminated(self, played_move: int):
+        """Returns True if the played move led to a terminal state."""
+        return self.won(played_move) or self.get_available() == 0
 
-    def move(self, bit_location: int) -> dict:
-        """Takes the current gamestate and returns a new state with the move applied"""
+    def move(self, played_move: int) -> dict:
+        """
+        Takes the current gamestate and applies the move. Returns true if the new
+        game state is terminal.
+        """
         if self.player:
             new_board = (self.board[not self.player] |
-                         bit_location, self.board[self.player])
+                         played_move, self.board[self.player])
         else:
             new_board = (self.board[self.player],
-                         self.board[not self.player] | bit_location)
+                         self.board[not self.player] | played_move)
         return {'player': not self.player, 'board': new_board}
-
-
-class GameSimulator(GameState):
-    """Gamestate that allows simulation to be run on current board"""
-
-    def __init__(self, state=None) -> None:
-        super().__init__(state)
-        self.board = [0b000000000, 0b000000000]
-        self.player = state['player']
-        self.board[0] = state['board'][0]
-        self.board[1] = state['board'][1]
-
-    def __repr__(self) -> str:
-        return f'Player: {self.player} State: {bin(self.board[0])}, {bin(self.board[1])}'
-
-    def move(self, bit_location: int) -> bool:
-        """Alternative move function where the input move is applied to the gamestate"""
-        self.board[not self.player] |= bit_location
-        self.player = not self.player
-        return self.is_terminated()
-
-    def _simulate_move(self) -> bool:
-        """Plays a random move out of available positions"""
-        move = random.choice(self.get_available_moves())
-        return self.move(move)
-
-    def play_out(self) -> int:
-        """Simulates current board till terminal state"""
-        terminated = False
-        while not terminated:
-            terminated = self._simulate_move()
-        if self.is_won():
-            result = self.get_player()
-        else:
-            result = None
-        return result
 
 
 class Node:
     """Monte Carlo Tree search node"""
 
     def __init__(self, gamestate=None, parent=None, played_move=None) -> None:
-        if gamestate is None:
-            self.gamestate = GameState()
-        else:
+        if gamestate:
             self.gamestate = gamestate
+            self.leaf_node = self.gamestate.terminated(played_move)
+        else:
+            self.gamestate = GameState()
+            self.leaf_node = False
         self.parent = parent
+        self.played_move = played_move
         self.children = []
         self.visits = 0
         self.wins = 0
-        self.possible_moves = self.gamestate.get_available_moves()
-        if self.possible_moves == [] or self.gamestate.is_won():
-            self.is_leaf = True
+        if self.leaf_node:
+            self.possible_moves = []
         else:
-            self.is_leaf = False
-        self.played_move = played_move
-        self.uct = 0
+            self.possible_moves = self.gamestate.get_available_moves()
 
     def __repr__(self) -> str:
         return f'{self.gamestate} {CONVERT_MOVE[self.played_move]}'
 
     def __lt__(self, other) -> bool:
-        return self.uct < other.uct
+        return self.calc_uct() < other.calc_uct()
 
     def __eq__(self, other) -> bool:
-        return self.uct == other.uct
+        return self.calc_uct() == other.calc_uct()
 
-    def select(self, constant) -> None:
+    def select(self) -> None:
         """Finds the best (according to uct) child node recursively untill a leaf is reached"""
         if self.children and not self.possible_moves:
-            for child_node in self.children:
-                child_node.calc_uct(constant)
-            max(self.children).select(constant)
+            max(self.children).select()
         else:
             self.expand()
 
@@ -214,7 +172,7 @@ class Node:
         Takes a node with possible moves, and expands one randomly to a child node.
         If current node is a leaf, it backpropagates the results up the tree.
         """
-        if not self.is_leaf:
+        if not self.leaf_node:
             random_move = self.possible_moves.pop(
                 random.choice(range(len(self.possible_moves))))
             new_gamestate = GameState(self.gamestate.move(random_move))
@@ -222,7 +180,7 @@ class Node:
                 Node(gamestate=new_gamestate, parent=self, played_move=random_move))
             self.children[-1].simulate()
         else:
-            if self.gamestate.is_won():
+            if self.gamestate.get_available():
                 result = self.gamestate.get_player()
             else:
                 result = None
@@ -233,15 +191,20 @@ class Node:
         Takes current gamestate and simulates till terminal position,
         then backpropagates results.
         """
-        simulation_game = GameSimulator(self.gamestate.get_state())
-        if not simulation_game.is_terminated():
-            result = simulation_game.play_out()
-        else:
-            if simulation_game.is_won():
-                result = not simulation_game.get_player()
-            else:
-                result = None
+        sim = GameState(self.gamestate.get_state())
+        terminated = False
+        while not terminated:
+            available_moves = sim.get_available_moves()
+            if not available_moves:
+                break
+            new_move = random.choice(available_moves)
+            sim  = GameState(sim.move(new_move))
+            terminated = sim.terminated(new_move)
 
+        if sim.get_available():
+            result = sim.get_player()
+        else:
+            result = None
         self.backprop(result)
 
     def backprop(self, result: int) -> None:
@@ -252,21 +215,28 @@ class Node:
         if self.parent:
             self.parent.backprop(result)
 
-    def calc_uct(self, constant) -> None:
+    def calc_uct(self) -> float:
         """calculates UCT value from a node."""
         if self.visits == 0:
             self.visits = 0.001
-        self.uct = (self.wins/self.visits) + constant * \
+        return (self.wins/self.visits) + EXPLORATION_CONST * \
             math.sqrt(math.log(self.parent.visits)/self.visits)
+
+    def calc_best(self) -> float:
+        """Calculates the best node (exploitation factor)."""
+        return self.wins / self.visits
+
+    def best_child(self) -> Node:
+        """Returns the best child node, to move to."""
+        return max(self.children, key=lambda child: child.calc_best())
 
 
 class MonteCarloTreeSearch:
     """
     Basic implementation of Monte Carlo Tree Search
     """
-    def __init__(self, exploration_constant=0.8, calculation_time=.09) -> None:
+    def __init__(self, calculation_time=.09) -> None:
         self.root = Node()
-        self.constant = exploration_constant
         self.calc_time = calculation_time
         self.first_move = True
         self.iterations = 0
@@ -289,16 +259,13 @@ class MonteCarloTreeSearch:
                 next_node = child
                 break
         if next_node is None:
-            next_state = self.root.gamestate.move(move)
             next_node = Node(gamestate=GameState(
-                next_state), played_move=move)
+                self.root.gamestate.get_state()), played_move=move)
         self.swap_root(next_node)
 
     def choose_best(self) -> int:
         """Chooses best move from root node, returns the move."""
-        for child in self.root.children:
-            child.calc_uct(0)
-        self.swap_root(max(self.root.children))
+        self.swap_root(self.root.best_child())
         return self.root.played_move
 
     def run(self) -> int:
@@ -308,7 +275,7 @@ class MonteCarloTreeSearch:
         """
         start = perf_counter()
         while perf_counter() - start < self.calc_time + .9 * self.first_move:
-            self.root.select(self.constant)
+            self.root.select()
         self.first_move = False
         return self.choose_best()
 
@@ -338,7 +305,7 @@ class PlayGame:
             user_input = input('Enter Move: ')
             print(f'Computer plays: {self.move(user_input)}')
             print(f'Iterations: {self.mcts.iterations}')
-            if self.mcts.root.gamestate.is_won():
+            if self.mcts.root.leaf_node:
                 print(
                     f'Game is won by {self.mcts.root.gamestate.get_player()}')
                 break
